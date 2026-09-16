@@ -20,12 +20,19 @@
             touch-action: manipulation;
         }
 
+        html, body {
+            width: 100%;
+            min-height: 100%;
+            margin: 0;
+        }
+
         body {
             background:
                 radial-gradient(circle at 50% -10%, rgba(14, 165, 233, 0.18), transparent 42%),
                 #070b14;
             color: #ffffff;
             overflow: hidden;
+            overscroll-behavior: none;
         }
 
         #gameCanvas {
@@ -88,6 +95,87 @@
             background: #06b6d4;
             color: #ffffff;
             box-shadow: 0 0 12px rgba(6, 182, 212, 0.8);
+        }
+
+        @media (max-width: 767px) {
+            body {
+                height: 100dvh;
+                min-height: 100dvh;
+            }
+
+            header {
+                flex: 0 0 auto;
+                min-height: 54px;
+            }
+
+            header > div:first-child h1 {
+                font-size: 0.95rem;
+            }
+
+            header > div:first-child .w-10 {
+                width: 2.15rem;
+                height: 2.15rem;
+            }
+
+            header .text-xs {
+                font-size: 0.65rem;
+            }
+
+            header > div:last-child {
+                gap: 0.3rem;
+            }
+
+            header > div:last-child > div {
+                padding-left: 0.4rem;
+                padding-right: 0.4rem;
+            }
+
+            main {
+                min-height: 0;
+                margin: 0;
+                padding: 0.35rem;
+            }
+
+            #gameCanvas {
+                width: min(100%, calc((100dvh - 245px) * 1.3636));
+                max-height: 100%;
+            }
+
+            footer {
+                flex: 0 0 auto;
+                height: 148px;
+                padding-top: 0.35rem;
+                padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+            }
+
+            footer .grid {
+                width: 128px;
+                height: 128px;
+            }
+
+            .dpad-btn {
+                min-width: 40px;
+                min-height: 40px;
+                font-size: 1.15rem;
+            }
+
+            #btnPlantBomb {
+                width: 86px;
+                height: 86px;
+            }
+
+            .glass-panel {
+                backdrop-filter: blur(8px);
+            }
+        }
+
+        @media (max-height: 620px) and (max-width: 767px) {
+            footer { height: 112px; }
+            footer .grid { width: 96px; height: 96px; gap: 0.2rem; }
+            .dpad-btn { min-width: 30px; min-height: 30px; font-size: 0.85rem; }
+            #btnPlantBomb { width: 68px; height: 68px; }
+            #btnPlantBomb i { font-size: 1.35rem; }
+            #gameCanvas { width: min(100%, calc((100dvh - 190px) * 1.3636)); }
         }
     </style>
 </head>
@@ -422,6 +510,7 @@
                 this.activeBombs = 0;
                 this.fireRadius = 1;
                 this.invulnerable = 0; // Frames remaining for invincibility flash
+                this.damageCooldown = 0; // Unified hit lock prevents multi-hit frame bursts
             }
 
             update(keys, map, bombs) {
@@ -452,6 +541,7 @@
                 }
 
                 if (this.invulnerable > 0) this.invulnerable--;
+                if (this.damageCooldown > 0) this.damageCooldown--;
             }
 
             checkCollision(newX, newY, map, bombs) {
@@ -1028,9 +1118,16 @@
             }
 
             playerHurt() {
-                this.player.lives--;
+                // A single shared cooldown prevents one explosion/enemy overlap from
+                // consuming several lives in the same frame or during one contact.
+                if (this.gameState !== 'PLAYING' || this.player.damageCooldown > 0) return false;
+
+                this.player.lives = Math.max(0, this.player.lives - 1);
+                this.player.damageCooldown = 120; // 2 seconds at 60 FPS
+                this.player.invulnerable = 120;
                 audio.playHurt();
                 this.particles.spawnExplosion(this.player.x, this.player.y);
+                this.screenShake = Math.min(18, this.screenShake + 5);
 
                 if (this.player.lives <= 0) {
                     this.gameState = 'GAMEOVER';
@@ -1038,8 +1135,13 @@
                     document.getElementById('goLevel').innerText = this.level;
                     document.getElementById('gameOverMenu').classList.remove('hidden');
                 } else {
-                    this.player.invulnerable = 90; // Invincible for 1.5s
+                    // Respawn at the protected starting tile so the next life cannot
+                    // immediately collide with the same blast or enemy.
+                    this.player.x = TILE_SIZE * 1.5;
+                    this.player.y = TILE_SIZE * 1.5;
                 }
+                this.updateHUD();
+                return true;
             }
 
             updateHUD() {
@@ -1187,12 +1289,10 @@
                         this.keys[keyName] = false;
                     };
 
-                    btn.addEventListener('touchstart', start);
-                    btn.addEventListener('touchend', end, { passive: false });
-                    btn.addEventListener('touchcancel', end, { passive: false });
-                    btn.addEventListener('mousedown', start);
-                    btn.addEventListener('mouseup', end);
-                    btn.addEventListener('mouseleave', end);
+                    btn.addEventListener('pointerdown', start, { passive: false });
+                    btn.addEventListener('pointerup', end, { passive: false });
+                    btn.addEventListener('pointercancel', end, { passive: false });
+                    btn.addEventListener('pointerleave', end, { passive: false });
                 };
 
                 bindTouch('btnUp', 'Up');
@@ -1202,14 +1302,11 @@
 
                 const btnPlant = document.getElementById('btnPlantBomb');
                 if (btnPlant) {
-                    btnPlant.addEventListener('touchstart', (e) => {
+                    const plant = (e) => {
                         e.preventDefault();
                         this.plantBomb();
-                    });
-                    btnPlant.addEventListener('mousedown', (e) => {
-                        e.preventDefault();
-                        this.plantBomb();
-                    });
+                    };
+                    btnPlant.addEventListener('pointerdown', plant, { passive: false });
                 }
 
                 // UI Overlay Buttons
