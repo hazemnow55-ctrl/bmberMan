@@ -21,9 +21,27 @@
         }
 
         body {
-            background-color: #0b0f19;
+            background:
+                radial-gradient(circle at 50% -10%, rgba(14, 165, 233, 0.18), transparent 42%),
+                #070b14;
             color: #ffffff;
             overflow: hidden;
+        }
+
+        #gameCanvas {
+            width: min(100%, 720px);
+            height: auto;
+            aspect-ratio: 15 / 11;
+            image-rendering: auto;
+            transition: filter 120ms ease;
+        }
+
+        .game-vignette {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            border-radius: 1rem;
+            box-shadow: inset 0 0 90px rgba(2, 6, 23, 0.72);
         }
 
         .neon-glow-cyan {
@@ -64,7 +82,6 @@
             justify-content: center;
             font-size: 1.5rem;
             color: #94a3b8;
-            active:bg-cyan-600;
         }
 
         .dpad-btn:active {
@@ -316,8 +333,12 @@
                 this.x = x;
                 this.y = y;
                 this.color = color;
-                this.vx = (Math.random() - 0.5) * speed;
-                this.vy = (Math.random() - 0.5) * speed;
+                const angle = Math.random() * Math.PI * 2;
+                const velocity = speed * (0.35 + Math.random() * 0.9);
+                this.vx = Math.cos(angle) * velocity;
+                this.vy = Math.sin(angle) * velocity;
+                this.gravity = 0.035 + Math.random() * 0.045;
+                this.rotation = Math.random() * Math.PI;
                 this.size = size;
                 this.life = life;
                 this.maxLife = life;
@@ -326,6 +347,9 @@
             update() {
                 this.x += this.vx;
                 this.y += this.vy;
+                this.vy += this.gravity;
+                this.vx *= 0.985;
+                this.rotation += 0.08;
                 this.life--;
             }
 
@@ -333,9 +357,14 @@
                 ctx.save();
                 ctx.globalAlpha = Math.max(0, this.life / this.maxLife);
                 ctx.fillStyle = this.color;
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
                 ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fill();
+                ctx.moveTo(-this.size, 0);
+                ctx.lineTo(this.size, 0);
+                ctx.lineWidth = Math.max(1, this.size * 0.8);
+                ctx.strokeStyle = this.color;
+                ctx.stroke();
                 ctx.restore();
             }
         }
@@ -348,14 +377,14 @@
 
             spawnExplosion(x, y) {
                 const colors = ['#ef4444', '#f97316', '#eab308', '#ffffff'];
-                for (let i = 0; i < 25; i++) {
+                for (let i = 0; i < 42; i++) {
                     const color = colors[Math.floor(Math.random() * colors.length)];
                     this.particles.push(new Particle(x, y, color, 8, Math.random() * 5 + 2, 30));
                 }
             }
 
             spawnSparkles(x, y, color) {
-                for (let i = 0; i < 15; i++) {
+                for (let i = 0; i < 24; i++) {
                     this.particles.push(new Particle(x, y, color, 4, Math.random() * 3 + 1, 20));
                 }
             }
@@ -743,13 +772,22 @@
                 this.initMap(); // Initialize map grid so canvas can render on start menu
 
                 this.keys = {};
+                this.screenShake = 0;
+                this.flash = 0;
+                this.ambientTime = 0;
                 this.setupEventListeners();
                 this.resizeCanvas();
             }
 
             resizeCanvas() {
-                this.canvas.width = COLS * TILE_SIZE;
-                this.canvas.height = ROWS * TILE_SIZE;
+                const width = COLS * TILE_SIZE;
+                const height = ROWS * TILE_SIZE;
+                const dpr = Math.min(window.devicePixelRatio || 1, 2);
+                this.canvas.width = width * dpr;
+                this.canvas.height = height * dpr;
+                this.canvas.style.width = '';
+                this.canvas.style.height = '';
+                this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             }
 
             initMap() {
@@ -781,14 +819,19 @@
                 const enemyCount = 3 + this.level * 2;
                 
                 for (let i = 0; i < enemyCount; i++) {
-                    let r, c;
-                    do {
-                        r = Math.floor(Math.random() * (ROWS - 2)) + 1;
-                        c = Math.floor(Math.random() * (COLS - 2)) + 1;
-                    } while (this.map[r][c] !== TILE_EMPTY || (r <= 3 && c <= 3));
-
+                    const candidates = [];
+                    for (let row = 1; row < ROWS - 1; row++) {
+                        for (let col = 1; col < COLS - 1; col++) {
+                            if (this.map[row][col] === TILE_EMPTY && !(row <= 3 && col <= 3) &&
+                                !this.enemies.some(enemy => enemy.col === col && enemy.row === row)) {
+                                candidates.push({ row, col });
+                            }
+                        }
+                    }
+                    if (!candidates.length) break;
+                    const spawn = candidates[Math.floor(Math.random() * candidates.length)];
                     const type = (i % 3 === 0 && this.level > 1) ? 2 : 1; // Advanced chasers appear on level 2+
-                    this.enemies.push(new Enemy(c, r, type));
+                    this.enemies.push(new Enemy(spawn.col, spawn.row, type));
                 }
             }
 
@@ -833,6 +876,8 @@
             triggerExplosion(bomb) {
                 audio.playExplosion();
                 this.particles.spawnExplosion(bomb.x, bomb.y);
+                this.screenShake = Math.min(18, this.screenShake + 7);
+                this.flash = Math.max(this.flash, 0.28);
 
                 const affectedTiles = [{ col: bomb.col, row: bomb.row }];
                 const directions = [
@@ -966,8 +1011,11 @@
                     }
                 }
 
-                // Particles Update
+                // Particles and cinematic feedback
                 this.particles.update();
+                this.screenShake *= 0.84;
+                this.flash *= 0.82;
+                this.ambientTime += 0.045;
 
                 // Check Level Win Condition
                 if (this.enemies.length === 0) {
@@ -1006,9 +1054,19 @@
                 // Prevent rendering if map is not initialized
                 if (!this.map || this.map.length === 0) return;
 
-                // Clear Canvas
-                this.ctx.fillStyle = '#0f172a';
-                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                const ctx = this.ctx;
+                ctx.save();
+                if (this.screenShake > 0.15) {
+                    ctx.translate((Math.random() - 0.5) * this.screenShake, (Math.random() - 0.5) * this.screenShake);
+                }
+                // Deep space playfield with a living neon ambience
+                const bg = ctx.createLinearGradient(0, 0, 0, ROWS * TILE_SIZE);
+                bg.addColorStop(0, '#111c35');
+                bg.addColorStop(1, '#070b16');
+                ctx.fillStyle = bg;
+                ctx.fillRect(0, 0, COLS * TILE_SIZE, ROWS * TILE_SIZE);
+                ctx.fillStyle = `rgba(34, 211, 238, ${0.025 + Math.sin(this.ambientTime) * 0.012})`;
+                ctx.fillRect(0, 0, COLS * TILE_SIZE, ROWS * TILE_SIZE);
 
                 // Draw Grid & Map Blocks
                 for (let r = 0; r < ROWS; r++) {
@@ -1062,11 +1120,26 @@
                     const x = exp.col * TILE_SIZE;
                     const y = exp.row * TILE_SIZE;
 
+                    const progress = 1 - exp.timer / 20;
+                    const pulse = 1 + Math.sin(progress * Math.PI) * 0.18;
                     this.ctx.save();
-                    this.ctx.shadowColor = '#f97316';
-                    this.ctx.shadowBlur = 15;
-                    this.ctx.fillStyle = Math.random() > 0.4 ? '#ef4444' : '#f59e0b';
-                    this.ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+                    this.ctx.translate(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+                    this.ctx.scale(pulse, pulse);
+                    this.ctx.globalCompositeOperation = 'lighter';
+                    this.ctx.shadowColor = '#ff6b1a';
+                    this.ctx.shadowBlur = 24;
+                    const blast = this.ctx.createRadialGradient(0, 0, 2, 0, 0, TILE_SIZE * 0.7);
+                    blast.addColorStop(0, '#fff7ae');
+                    blast.addColorStop(0.28, '#ffd166');
+                    blast.addColorStop(0.68, '#ff6b1a');
+                    blast.addColorStop(1, 'rgba(239, 68, 68, 0)');
+                    this.ctx.fillStyle = blast;
+                    this.ctx.beginPath();
+                    this.ctx.arc(0, 0, TILE_SIZE * 0.64, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    this.ctx.fillStyle = '#fff7ae';
+                    this.ctx.fillRect(-TILE_SIZE * 0.13, -TILE_SIZE * 0.42, TILE_SIZE * 0.26, TILE_SIZE * 0.84);
+                    this.ctx.fillRect(-TILE_SIZE * 0.42, -TILE_SIZE * 0.13, TILE_SIZE * 0.84, TILE_SIZE * 0.26);
                     this.ctx.restore();
                 });
 
@@ -1076,16 +1149,23 @@
                 // Draw Player
                 this.player.draw(this.ctx);
 
-                // Draw Particles
+                // Draw Particles and finish cinematic overlay
                 this.particles.draw(this.ctx);
+                this.ctx.restore();
+                if (this.flash > 0.01) {
+                    this.ctx.save();
+                    this.ctx.globalAlpha = this.flash;
+                    this.ctx.fillStyle = '#fff7ed';
+                    this.ctx.fillRect(0, 0, COLS * TILE_SIZE, ROWS * TILE_SIZE);
+                    this.ctx.restore();
+                }
             }
 
             setupEventListeners() {
                 // Keyboard Listeners
                 window.addEventListener('keydown', (e) => {
-                    if (e.code === 'Space') {
-                        this.plantBomb();
-                    }
+                    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+                    if (e.code === 'Space' && !e.repeat) this.plantBomb();
                     this.keys[e.code] = true;
                 });
 
@@ -1108,9 +1188,11 @@
                     };
 
                     btn.addEventListener('touchstart', start);
-                    btn.addEventListener('touchend', end);
+                    btn.addEventListener('touchend', end, { passive: false });
+                    btn.addEventListener('touchcancel', end, { passive: false });
                     btn.addEventListener('mousedown', start);
                     btn.addEventListener('mouseup', end);
+                    btn.addEventListener('mouseleave', end);
                 };
 
                 bindTouch('btnUp', 'Up');
